@@ -96,7 +96,7 @@ export default function Dashboard({ user, distributors, onToggleStatus, onDelete
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">
-            {user?.role === 'admin' ? 'Todas as Distribuidoras' : 'Minhas Distribuidoras'}
+            Todas as Distribuidoras
           </h1>
           <p className="text-slate-500 text-sm mt-0.5">
             {distributors.length} cadastrada{distributors.length !== 1 ? 's' : ''} — {openCount} aberta{openCount !== 1 ? 's' : ''}, {closedCount} fechada{closedCount !== 1 ? 's' : ''}
