@@ -11,26 +11,15 @@ export function useDistributors(userId: string | undefined, userRole?: 'admin' |
     const data = localStorage.getItem(DISTRIBUTORS_KEY);
     if (data) {
       const all = JSON.parse(data) as Distributor[];
-      if (userRole === 'admin') {
-        setDistributors(all);
-      } else {
-        setDistributors(all.filter((d) => d.userId === userId));
-      }
+      // Todos os usuários veem todas as distribuidoras cadastradas
+      setDistributors(all);
     }
   }, [userId, userRole]);
 
   const saveAll = useCallback((items: Distributor[]) => {
-    const data = localStorage.getItem(DISTRIBUTORS_KEY);
-    const all = data ? (JSON.parse(data) as Distributor[]) : [];
-    
-    if (userRole === 'admin') {
-      localStorage.setItem(DISTRIBUTORS_KEY, JSON.stringify(items));
-    } else {
-      const others = all.filter((d) => d.userId !== userId);
-      const updated = [...others, ...items];
-      localStorage.setItem(DISTRIBUTORS_KEY, JSON.stringify(updated));
-    }
-  }, [userId, userRole]);
+    // Salva todas as distribuidoras sem filtragem
+    localStorage.setItem(DISTRIBUTORS_KEY, JSON.stringify(items));
+  }, []);
 
   const add = useCallback((distributor: Omit<Distributor, 'id' | 'createdAt' | 'updatedAt' | 'userId'>) => {
     const newDistributor: Distributor = {
