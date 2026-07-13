@@ -1,331 +1,404 @@
-import { useState, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
 import {
-  Plus, Search, MapPin, Store, Trash2, Edit3, Power,
-  ImageOff, Filter, X, Download, UploadCloud
-} from 'lucide-react';
-import * as XLSX from 'xlsx';
-import type { Distributor, User } from '../types';
+  addDistributor,
+  deleteDistributor,
+  getDistributors,
+  logoutUser,
+  updateDistributor,
+  type Distributor,
+} from "@/supabase/services";
+import { getSupabaseErrorMessage } from "@/utils/supabaseErrors";
 
-interface DashboardProps {
-  user: User | null;
-  distributors: Distributor[];
-  onToggleStatus: (id: string) => void;
-  onDelete: (id: string) => void;
-  onBulkAdd: (items: Omit<Distributor, 'id' | 'createdAt' | 'updatedAt' | 'userId'>[]) => void;
-}
+const initialForm: Omit<Distributor, "id" | "created_at" | "updated_at" | "user_id"> = {
+  razao_social: "",
+  nome_fantasia: "",
+  cnpj: "",
+  email: "",
+  telefone: "",
+  endereco: "",
+  cidade: "",
+  estado: "",
+  cep: "",
+  responsavel: "",
+};
 
-export default function Dashboard({ user, distributors, onToggleStatus, onDelete, onBulkAdd }: DashboardProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<'all' | 'open' | 'closed'>('all');
-  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+export default function Dashboard() {
+  const { user, loading } = useAuth();
+  const navigate = useNavigate();
+  const [form, setForm] = useState(initialForm);
+  const [distributors, setDistributors] = useState<Distributor[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  const filtered = distributors.filter((d) => {
-    const matchesSearch =
-      d.name.toLowerCase().includes(search.toLowerCase()) ||
-      d.address.toLowerCase().includes(search.toLowerCase());
-    const matchesFilter =
-      filter === 'all' ? true : filter === 'open' ? d.isOpen : !d.isOpen;
-    return matchesSearch && matchesFilter;
-  });
+  useEffect(() => {
+    if (!loading && !user) {
+      navigate("/login");
+    }
+  }, [user, loading, navigate]);
 
-  const openCount = distributors.filter((d) => d.isOpen).length;
-  const closedCount = distributors.filter((d) => !d.isOpen).length;
+  useEffect(() => {
+    if (user) {
+      fetchDistributors();
+    }
+  }, [user]);
 
-  const handleExportExcel = () => {
-    const dataToExport = distributors.map(d => ({
-      'Nome da Distribuidora': d.name,
-      'Endereço': d.address,
-      'Coordenadas (Localização)': d.location || 'Não informada',
-      'Observação': d.observation || '',
-      'Status': d.isOpen ? 'Aberta' : 'Fechada',
-      'Data de Cadastro': new Date(d.createdAt).toLocaleDateString('pt-BR'),
-      'Última Atualização': new Date(d.updatedAt).toLocaleDateString('pt-BR')
-    }));
-
-    const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Distribuidoras');
-    XLSX.writeFile(workbook, 'relatorio_distribuidoras.xlsx');
+  const fetchDistributors = async () => {
+    setIsLoading(true);
+    try {
+      const data = await getDistributors();
+      setDistributors(data);
+    } catch (err) {
+      console.error("Erro ao carregar distribuidoras:", err);
+      setMessage(getSupabaseErrorMessage(err));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
-  const handleImportExcel = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const bstr = evt.target?.result;
-        const wb = XLSX.read(bstr, { type: 'binary' });
-        const wsname = wb.SheetNames[0];
-        const ws = wb.Sheets[wsname];
-        const data = XLSX.utils.sheet_to_json(ws);
-        
-        const newItems = data.map((row: any) => ({
-          name: row['Nome da Distribuidora'] || row['Nome'] || row['name'] || 'Sem Nome',
-          address: row['Endereço'] || row['Endereco'] || row['address'] || '',
-          location: row['Coordenadas (Localização)'] || row['Coordenadas'] || row['location'] || '',
-          observation: row['Observação'] || row['Observacao'] || row['observation'] || '',
-          isOpen: row['Status'] === 'Aberta' || row['isOpen'] === true || row['Status'] === 'Aberto' || true,
-          photo: null
-        }));
-        
-        if (newItems.length > 0) {
-          onBulkAdd(newItems);
-          alert(`${newItems.length} distribuidoras importadas com sucesso!`);
-        } else {
-          alert('Nenhum dado encontrado no arquivo.');
-        }
-      } catch (error) {
-        alert('Erro ao importar arquivo. Verifique o formato e tente novamente.');
-      }
-      
-      // Limpa o input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
-    };
-    reader.readAsBinaryString(file);
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
   };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage("");
+
+    if (!user) {
+      setMessage("Você precisa estar logado para salvar dados.");
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      if (editingId) {
+        await updateDistributor(editingId, form);
+        setMessage("Distribuidora atualizada com sucesso!");
+      } else {
+        await addDistributor(form);
+        setMessage("Distribuidora cadastrada com sucesso!");
+      }
+      setForm(initialForm);
+      setEditingId(null);
+      await fetchDistributors();
+    } catch (err) {
+      console.error("Erro ao salvar distribuidora:", err);
+      setMessage(getSupabaseErrorMessage(err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleEdit = (distributor: Distributor) => {
+    setEditingId(distributor.id || null);
+    setForm({
+      razao_social: distributor.razao_social,
+      nome_fantasia: distributor.nome_fantasia,
+      cnpj: distributor.cnpj,
+      email: distributor.email,
+      telefone: distributor.telefone,
+      endereco: distributor.endereco,
+      cidade: distributor.cidade,
+      estado: distributor.estado,
+      cep: distributor.cep,
+      responsavel: distributor.responsavel,
+    });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Tem certeza que deseja excluir esta distribuidora?")) return;
+    setIsLoading(true);
+    try {
+      await deleteDistributor(id);
+      setMessage("Distribuidora excluída com sucesso!");
+      await fetchDistributors();
+    } catch (err) {
+      console.error("Erro ao excluir distribuidora:", err);
+      setMessage(getSupabaseErrorMessage(err));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await logoutUser();
+    navigate("/login");
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setForm(initialForm);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-800">
-            Todas as Distribuidoras
-          </h1>
-          <p className="text-slate-500 text-sm mt-0.5">
-            {distributors.length} cadastrada{distributors.length !== 1 ? 's' : ''} — {openCount} aberta{openCount !== 1 ? 's' : ''}, {closedCount} fechada{closedCount !== 1 ? 's' : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {user?.role === 'admin' && (
-            <>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleImportExcel}
-                accept=".xlsx, .xls, .csv"
-                className="hidden"
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-medium rounded-lg transition-colors shadow-sm"
-              >
-                <UploadCloud className="w-4 h-4" />
-                <span className="hidden sm:inline">Importar</span>
-              </button>
-              <button
-                onClick={handleExportExcel}
-                className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 font-medium rounded-lg transition-colors shadow-sm"
-              >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">Exportar</span>
-              </button>
-            </>
-          )}
-          <Link
-            to="/nova"
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium rounded-lg transition-colors shadow-sm"
-          >
-            <Plus className="w-4 h-4" />
-            Nova
-          </Link>
-        </div>
-      </div>
-
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar por nome ou endereço..."
-            className="w-full pl-10 pr-10 py-2.5 bg-white border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-          />
-          {search && (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="mx-auto max-w-6xl space-y-8">
+        <header className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-slate-900">
+              Cadastro de Distribuidoras
+            </h1>
+            <p className="text-sm text-slate-500">
+              Gerencie seus cadastros no Supabase
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-slate-600">{user?.email}</span>
             <button
-              onClick={() => setSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              onClick={handleLogout}
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
             >
-              <X className="w-4 h-4" />
+              Sair
             </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-slate-400" />
-          {(['all', 'open', 'closed'] as const).map((f) => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                filter === f
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
-              }`}
-            >
-              {f === 'all' ? 'Todas' : f === 'open' ? 'Abertas' : 'Fechadas'}
-            </button>
-          ))}
-        </div>
-      </div>
+          </div>
+        </header>
 
-      {filtered.length === 0 ? (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="text-center py-20 bg-white rounded-2xl border border-dashed border-slate-300"
-        >
-          <Store className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-          <h3 className="text-lg font-medium text-slate-700">
-            {distributors.length === 0 ? 'Nenhuma distribuidora cadastrada' : 'Nenhuma distribuidora encontrada'}
-          </h3>
-          <p className="text-slate-500 text-sm mt-1">
-            {distributors.length === 0
-              ? 'Cadastre sua primeira distribuidora para começar.'
-              : 'Tente ajustar os filtros de busca.'}
-          </p>
-          {distributors.length === 0 && (
-            <Link
-              to="/nova"
-              className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              Cadastrar distribuidora
-            </Link>
-          )}
-        </motion.div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-          <AnimatePresence>
-            {filtered.map((d) => (
-              <motion.div
-                key={d.id}
-                layout
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.95 }}
-                transition={{ duration: 0.2 }}
-                className="bg-white rounded-xl border border-slate-200 overflow-hidden hover:shadow-md transition-shadow group"
-              >
-                <div className="relative h-40 bg-slate-100 overflow-hidden">
-                  {d.photo ? (
-                    <img
-                      src={d.photo}
-                      alt={d.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center">
-                      <ImageOff className="w-10 h-10 text-slate-300" />
-                    </div>
-                  )}
-                  <div className="absolute top-3 right-3">
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
-                        d.isOpen
-                          ? 'bg-emerald-500 text-white shadow-sm'
-                          : 'bg-red-500 text-white shadow-sm'
-                      }`}
-                    >
-                      <Power className="w-3 h-3" />
-                      {d.isOpen ? 'Aberta' : 'Fechada'}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="p-4">
-                  <h3 className="font-semibold text-slate-800 truncate">{d.name}</h3>
-                  <div className="flex items-start gap-1.5 mt-1.5 text-sm text-slate-500">
-                    <MapPin className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-                    <span className="line-clamp-2">{d.address}</span>
-                  </div>
-                  {d.location && (
-                    <div className="flex items-start gap-1.5 mt-1 text-xs text-slate-400">
-                      <MapPin className="w-3 h-3 mt-0.5 shrink-0" />
-                      <span className="line-clamp-1">{d.location}</span>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2 mt-4 pt-3 border-t border-slate-100">
-                    <button
-                      onClick={() => onToggleStatus(d.id)}
-                      className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                        d.isOpen
-                          ? 'bg-red-50 text-red-600 hover:bg-red-100'
-                          : 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
-                      }`}
-                    >
-                      <Power className="w-3.5 h-3.5" />
-                      {d.isOpen ? 'Fechar' : 'Aberta'}
-                    </button>
-                    <Link
-                      to={`/editar/${d.id}`}
-                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-slate-50 text-slate-600 hover:bg-slate-100 transition-colors"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" />
-                      Editar
-                    </Link>
-                    <button
-                      onClick={() => setDeleteConfirm(d.id)}
-                      className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
-      )}
-
-      <AnimatePresence>
-        {deleteConfirm && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-            onClick={() => setDeleteConfirm(null)}
+        {message && (
+          <div
+            className={`rounded-lg p-3 text-sm ${
+              message.includes("Erro") || message.includes("negada") || message.includes("não encontrada")
+                ? "bg-red-50 text-red-600"
+                : "bg-green-50 text-green-600"
+            }`}
           >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-white rounded-xl shadow-xl p-6 max-w-sm w-full"
-            >
-              <h3 className="text-lg font-semibold text-slate-800">Confirmar exclusão</h3>
-              <p className="text-slate-500 text-sm mt-1">
-                Tem certeza que deseja excluir esta distribuidora? Esta ação não pode ser desfeita.
-              </p>
-              <div className="flex gap-3 mt-5">
+            {message}
+          </div>
+        )}
+
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-medium text-slate-900">
+            {editingId ? "Editar distribuidora" : "Nova distribuidora"}
+          </h2>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Razão Social *
+                </label>
+                <input
+                  type="text"
+                  name="razao_social"
+                  required
+                  value={form.razao_social}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Nome Fantasia
+                </label>
+                <input
+                  type="text"
+                  name="nome_fantasia"
+                  value={form.nome_fantasia}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  CNPJ *
+                </label>
+                <input
+                  type="text"
+                  name="cnpj"
+                  required
+                  value={form.cnpj}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="00.000.000/0000-00"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  E-mail *
+                </label>
+                <input
+                  type="email"
+                  name="email"
+                  required
+                  value={form.email}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Telefone
+                </label>
+                <input
+                  type="tel"
+                  name="telefone"
+                  value={form.telefone}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                  placeholder="(00) 00000-0000"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Responsável
+                </label>
+                <input
+                  type="text"
+                  name="responsavel"
+                  value={form.responsavel}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Endereço
+                </label>
+                <input
+                  type="text"
+                  name="endereco"
+                  value={form.endereco}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-slate-700">
+                  Cidade
+                </label>
+                <input
+                  type="text"
+                  name="cidade"
+                  value={form.cidade}
+                  onChange={handleChange}
+                  className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    Estado
+                  </label>
+                  <input
+                    type="text"
+                    name="estado"
+                    value={form.estado}
+                    onChange={handleChange}
+                    className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="UF"
+                    maxLength={2}
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-slate-700">
+                    CEP
+                  </label>
+                  <input
+                    type="text"
+                    name="cep"
+                    value={form.cep}
+                    onChange={handleChange}
+                    className="w-full rounded-lg border border-slate-200 px-4 py-2.5 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+                    placeholder="00000-000"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="rounded-lg bg-indigo-600 px-6 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:opacity-60"
+              >
+                {isLoading
+                  ? "Salvando..."
+                  : editingId
+                  ? "Atualizar"
+                  : "Cadastrar"}
+              </button>
+              {editingId && (
                 <button
-                  onClick={() => setDeleteConfirm(null)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-lg transition-colors"
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="rounded-lg border border-slate-200 bg-white px-6 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
                 >
                   Cancelar
                 </button>
-                <button
-                  onClick={() => {
-                    onDelete(deleteConfirm);
-                    setDeleteConfirm(null);
-                  }}
-                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 text-white font-medium rounded-lg transition-colors"
-                >
-                  Excluir
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              )}
+            </div>
+          </form>
+        </section>
+
+        <section className="rounded-2xl bg-white p-6 shadow-sm">
+          <h2 className="mb-4 text-lg font-medium text-slate-900">
+            Distribuidoras cadastradas
+          </h2>
+          {isLoading && distributors.length === 0 ? (
+            <div className="flex justify-center py-8">
+              <div className="h-8 w-8 animate-spin rounded-full border-4 border-indigo-200 border-t-indigo-600" />
+            </div>
+          ) : distributors.length === 0 ? (
+            <p className="py-8 text-center text-sm text-slate-500">
+              Nenhuma distribuidora cadastrada ainda.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="border-b border-slate-100 text-slate-500">
+                  <tr>
+                    <th className="pb-3 pr-4 font-medium">Razão Social</th>
+                    <th className="pb-3 pr-4 font-medium">CNPJ</th>
+                    <th className="pb-3 pr-4 font-medium">E-mail</th>
+                    <th className="pb-3 pr-4 font-medium">Cidade/UF</th>
+                    <th className="pb-3 pr-4 font-medium">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {distributors.map((d) => (
+                    <tr key={d.id} className="text-slate-700">
+                      <td className="py-3 pr-4 font-medium text-slate-900">
+                        {d.razao_social}
+                      </td>
+                      <td className="py-3 pr-4">{d.cnpj}</td>
+                      <td className="py-3 pr-4">{d.email}</td>
+                      <td className="py-3 pr-4">
+                        {d.cidade}
+                        {d.estado ? `/${d.estado}` : ""}
+                      </td>
+                      <td className="py-3 pr-4">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handleEdit(d)}
+                            className="rounded-md bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-600 transition hover:bg-indigo-100"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => handleDelete(d.id!)}
+                            className="rounded-md bg-red-50 px-3 py-1 text-xs font-medium text-red-600 transition hover:bg-red-100"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
